@@ -26,6 +26,33 @@ async function getIdentityToken() {
   } catch (e) { return null; }
 }
 
+// ========== Groq緊急アラート呼び出し ==========
+async function callGroqAlert(symbol, changePercent, currentPrice, previousPrice) {
+  try {
+    const token = await getIdentityToken();
+    const response = await fetch(MAGI_AC_URL + "/api/alert/groq", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": token ? "Bearer " + token : ""
+      },
+      body: JSON.stringify({
+        symbol,
+        changePercent,
+        currentPrice,
+        previousPrice,
+        trigger: "PubSub価格変動"
+      })
+    });
+    const data = await response.json();
+    console.log("[GROQ-ALERT] Response:", data);
+    return data.alert || null;
+  } catch (e) {
+    console.error("[GROQ-ALERT] Error:", e.message);
+    return null;
+  }
+}
+
 const CONFIG = {
   // 全会一致ルール
   UNANIMOUS_REQUIRED: true,
@@ -212,6 +239,29 @@ app.post('/pubsub', async (req, res) => {
       return res.status(204).send();
     }
     
+
+    // 5%以上の急変はGroqで緊急判定
+    if (Math.abs(changePercent) >= 5.0) {
+      console.log("[DECISION] Sharp move detected! Calling Groq alert...");
+      const groqAlert = await callGroqAlert(symbol, changePercent, price, price / (1 + changePercent/100));
+      if (groqAlert && (groqAlert.urgency === "CRITICAL" || groqAlert.urgency === "HIGH")) {
+        console.log("[DECISION] CRITICAL alert from Groq:", groqAlert.reason);
+        // 緊急時は4AI合議をスキップして即時シグナル発行
+        const urgentSignal = {
+          symbol: symbol,
+          action: changePercent < 0 ? "SELL" : "BUY",
+          qty: 1,
+          price: price,
+          confidence: 0.9,
+          reason: "Groq緊急判定: " + groqAlert.reason,
+          trigger: "groq-critical-alert",
+          timestamp: new Date().toISOString()
+        };
+        await publishTradeSignal(urgentSignal);
+        return res.status(204).send();
+      }
+    }
+
     // AI分析実行
     const analysis = await getAIAnalysis(symbol);
     const decision = evaluateUnanimous(analysis);
