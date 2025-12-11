@@ -4,6 +4,7 @@
  */
 
 import express from 'express';
+import configLoader from '../utils/config-loader.js';
 import { PubSub } from '@google-cloud/pubsub';
 
 const app = express();
@@ -16,6 +17,15 @@ const MAGI_AC_URL = process.env.MAGI_AC_URL || 'https://magi-ac-398890937507.asi
 const pubsub = new PubSub({ projectId: PROJECT_ID });
 
 // ========== 設定 ==========
+// ========== Identity Token取得 ==========
+async function getIdentityToken() {
+  try {
+    const url = 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=' + MAGI_AC_URL;
+    const res = await fetch(url, { headers: { 'Metadata-Flavor': 'Google' } });
+    return await res.text();
+  } catch (e) { return null; }
+}
+
 const CONFIG = {
   // 全会一致ルール
   UNANIMOUS_REQUIRED: true,
@@ -105,7 +115,7 @@ function calculateBracketPrices(price) {
 
 // ========== 売買シグナル発行 ==========
 async function publishTradeSignal(signal) {
-  const topic = pubsub.topic('trade-signals');
+  const topic = pubsub.topic('magi-trading-signal');
   const data = Buffer.from(JSON.stringify(signal));
   
   try {
@@ -184,7 +194,7 @@ app.post('/decide', async (req, res) => {
 });
 
 // Pub/Subからのプッシュ受信（price-updates）
-app.post('/pubsub/price-update', async (req, res) => {
+app.post('/pubsub', async (req, res) => {
   try {
     const message = req.body.message;
     if (!message || !message.data) {
